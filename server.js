@@ -105,9 +105,11 @@ app.get('/current-date', (req, res) => {
 app.get('/check-availability', async (req, res) => {
   console.log('[check-availability] incoming request:');
   console.log('  query params:', JSON.stringify(req.query, null, 2));
+  console.log('  body:', JSON.stringify(req.body, null, 2));
   console.log('  headers:', JSON.stringify(req.headers, null, 2));
 
-  const { date, timezone } = req.query;
+  const date = req.body.date || req.query.date;
+  const timezone = req.body.timezone || req.query.timezone;
 
   if (!date) {
     return res.status(400).json({
@@ -230,7 +232,13 @@ app.post('/book-appointment', async (req, res) => {
   console.log('  body:', JSON.stringify(req.body, null, 2));
   console.log('  headers:', JSON.stringify(req.headers, null, 2));
 
-  const { name, phone, email, date, time, service, timezone } = req.body;
+  const name     = req.body.name     || req.body.Name;
+  const phone    = req.body.phone    || req.body.Phone;
+  const email    = req.body.email    || req.body.Email;
+  const date     = req.body.date     || req.body.Date;
+  const time     = req.body.time     || req.body.Time;
+  const service  = req.body.service  || req.body.Service;
+  const timezone = req.body.timezone || req.body.Timezone;
 
   // Validate required fields
   const missingFields = [];
