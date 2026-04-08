@@ -103,6 +103,10 @@ app.get('/current-date', (req, res) => {
 });
 
 app.get('/check-availability', async (req, res) => {
+  console.log('[check-availability] incoming request:');
+  console.log('  query params:', JSON.stringify(req.query, null, 2));
+  console.log('  headers:', JSON.stringify(req.headers, null, 2));
+
   const { date, timezone } = req.query;
 
   if (!date) {
@@ -222,7 +226,9 @@ app.get('/check-availability', async (req, res) => {
 });
 
 app.post('/book-appointment', async (req, res) => {
-  console.log('[book-appointment] received params:', JSON.stringify(req.body, null, 2));
+  console.log('[book-appointment] incoming request:');
+  console.log('  body:', JSON.stringify(req.body, null, 2));
+  console.log('  headers:', JSON.stringify(req.headers, null, 2));
 
   const { name, phone, email, date, time, service, timezone } = req.body;
 
