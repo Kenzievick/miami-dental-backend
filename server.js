@@ -102,129 +102,134 @@ app.get('/current-date', (req, res) => {
   res.json({ date: formatted });
 });
 
-app.get('/check-availability', async (req, res) => {
-  console.log('[check-availability] incoming request:');
-  console.log('  query params:', JSON.stringify(req.query, null, 2));
-  console.log('  body:', JSON.stringify(req.body, null, 2));
-  console.log('  headers:', JSON.stringify(req.headers, null, 2));
+// Support both GET and POST since Vapi sends tool calls as POST
+['get', 'post'].forEach((method) => {
+  app[method]('/check-availability', async (req, res) => {
+    try {
+      console.log('[check-availability] incoming request:');
+      console.log('  method:', req.method);
+      console.log('  query params:', JSON.stringify(req.query, null, 2));
+      console.log('  body:', JSON.stringify(req.body, null, 2));
+      console.log('  headers:', JSON.stringify(req.headers, null, 2));
 
-  const date = req.body.date || req.query.date;
-  const timezone = req.body.timezone || req.query.timezone;
+      const date     = req.body?.date     || req.query.date;
+      const timezone = req.body?.timezone || req.query.timezone;
 
-  if (!date) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required parameter: date. Accepts YYYY-MM-DD or natural language like "April 11" or "Saturday April 11".',
-    });
-  }
-
-  const parsedDate = parseDate(date);
-  if (!parsedDate) {
-    return res.status(400).json({
-      success: false,
-      error: `Could not parse date: "${date}". Try formats like "2026-04-11", "April 11", or "Saturday April 11".`,
-    });
-  }
-
-  const tz = timezone || 'America/New_York';
-
-  console.log(`[check-availability] raw="${date}" parsed="${parsedDate}" tz="${tz}"`);
-
-  // Determine day of week using noon UTC to avoid DST boundary issues
-  const dayOfWeek = new Date(`${parsedDate}T12:00:00Z`).getUTCDay(); // 0=Sun, 6=Sat
-
-  if (dayOfWeek === 0) {
-    return res.json({
-      success: true,
-      date: parsedDate,
-      timezone: tz,
-      available: { slots_30min: [], slots_60min: [] },
-      message: 'No availability on Sundays.',
-    });
-  }
-
-  const isSaturday = dayOfWeek === 6;
-  const startHour = isSaturday ? 9 : 8;
-  const endHour   = isSaturday ? 14 : 18;
-
-  const dayStart = localToUTC(parsedDate, 0, 0, tz);
-  const dayEnd   = localToUTC(parsedDate, 23, 59, tz);
-
-  try {
-    const calendar = getCalendarClient();
-
-    const freebusyRes = await calendar.freebusy.query({
-      resource: {
-        timeMin: dayStart.toISOString(),
-        timeMax: dayEnd.toISOString(),
-        timeZone: tz,
-        items: [{ id: process.env.GOOGLE_CALENDAR_ID }],
-      },
-    });
-
-    const busyPeriods = (
-      freebusyRes.data.calendars[process.env.GOOGLE_CALENDAR_ID]?.busy || []
-    ).map((b) => ({
-      start: new Date(b.start),
-      end: new Date(b.end),
-    }));
-
-    const workEnd = localToUTC(parsedDate, endHour, 0, tz);
-
-    const overlaps = (slotStart, slotEnd) =>
-      busyPeriods.some((b) => slotStart < b.end && slotEnd > b.start);
-
-    const slots30 = [];
-    const slots60 = [];
-
-    const totalMinutes = (endHour - startHour) * 60;
-
-    for (let offset = 0; offset < totalMinutes; offset += 30) {
-      const hour   = startHour + Math.floor(offset / 60);
-      const minute = offset % 60;
-
-      const slotStart = localToUTC(parsedDate, hour, minute, tz);
-      const slotEnd30 = new Date(slotStart.getTime() + 30 * 60 * 1000);
-      const slotEnd60 = new Date(slotStart.getTime() + 60 * 60 * 1000);
-
-      if (slotEnd30 <= workEnd && !overlaps(slotStart, slotEnd30)) {
-        slots30.push({
-          start:     formatTime(slotStart, tz),
-          end:       formatTime(slotEnd30, tz),
-          start_iso: slotStart.toISOString(),
-          end_iso:   slotEnd30.toISOString(),
+      if (!date) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required parameter: date. Accepts YYYY-MM-DD or natural language like "April 11" or "Saturday April 11".',
         });
       }
 
-      if (slotEnd60 <= workEnd && !overlaps(slotStart, slotEnd60)) {
-        slots60.push({
-          start:     formatTime(slotStart, tz),
-          end:       formatTime(slotEnd60, tz),
-          start_iso: slotStart.toISOString(),
-          end_iso:   slotEnd60.toISOString(),
+      const parsedDate = parseDate(String(date).trim());
+      if (!parsedDate) {
+        return res.status(400).json({
+          success: false,
+          error: `Could not parse date: "${date}". Try formats like "2026-04-11", "April 11", or "Saturday April 11".`,
         });
       }
+
+      const tz = timezone || 'America/New_York';
+
+      console.log(`[check-availability] raw="${date}" parsed="${parsedDate}" tz="${tz}"`);
+
+      // Determine day of week using noon UTC to avoid DST boundary issues
+      const dayOfWeek = new Date(`${parsedDate}T12:00:00Z`).getUTCDay(); // 0=Sun, 6=Sat
+
+      if (dayOfWeek === 0) {
+        return res.json({
+          success: true,
+          date: parsedDate,
+          timezone: tz,
+          available: { slots_30min: [], slots_60min: [] },
+          message: 'No availability on Sundays.',
+        });
+      }
+
+      const isSaturday = dayOfWeek === 6;
+      const startHour  = isSaturday ? 9 : 8;
+      const endHour    = isSaturday ? 14 : 18;
+
+      const dayStart = localToUTC(parsedDate, 0, 0, tz);
+      const dayEnd   = localToUTC(parsedDate, 23, 59, tz);
+
+      const calendar = getCalendarClient();
+
+      const freebusyRes = await calendar.freebusy.query({
+        resource: {
+          timeMin: dayStart.toISOString(),
+          timeMax: dayEnd.toISOString(),
+          timeZone: tz,
+          items: [{ id: process.env.GOOGLE_CALENDAR_ID }],
+        },
+      });
+
+      const busyPeriods = (
+        freebusyRes.data.calendars[process.env.GOOGLE_CALENDAR_ID]?.busy || []
+      ).map((b) => ({
+        start: new Date(b.start),
+        end: new Date(b.end),
+      }));
+
+      const workEnd = localToUTC(parsedDate, endHour, 0, tz);
+
+      const overlaps = (slotStart, slotEnd) =>
+        busyPeriods.some((b) => slotStart < b.end && slotEnd > b.start);
+
+      const slots30 = [];
+      const slots60 = [];
+
+      const totalMinutes = (endHour - startHour) * 60;
+
+      for (let offset = 0; offset < totalMinutes; offset += 30) {
+        const hour   = startHour + Math.floor(offset / 60);
+        const minute = offset % 60;
+
+        const slotStart = localToUTC(parsedDate, hour, minute, tz);
+        const slotEnd30 = new Date(slotStart.getTime() + 30 * 60 * 1000);
+        const slotEnd60 = new Date(slotStart.getTime() + 60 * 60 * 1000);
+
+        if (slotEnd30 <= workEnd && !overlaps(slotStart, slotEnd30)) {
+          slots30.push({
+            start:     formatTime(slotStart, tz),
+            end:       formatTime(slotEnd30, tz),
+            start_iso: slotStart.toISOString(),
+            end_iso:   slotEnd30.toISOString(),
+          });
+        }
+
+        if (slotEnd60 <= workEnd && !overlaps(slotStart, slotEnd60)) {
+          slots60.push({
+            start:     formatTime(slotStart, tz),
+            end:       formatTime(slotEnd60, tz),
+            start_iso: slotStart.toISOString(),
+            end_iso:   slotEnd60.toISOString(),
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        date: parsedDate,
+        timezone: tz,
+        day: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek],
+        hours: `${formatTime(localToUTC(parsedDate, startHour, 0, tz), tz)} – ${formatTime(workEnd, tz)}`,
+        available: {
+          slots_30min: slots30,
+          slots_60min: slots60,
+        },
+      });
+    } catch (err) {
+      console.error('[check-availability] ERROR:', err.message);
+      console.error(err.stack);
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error in /check-availability.',
+        details: err.message,
+      });
     }
-
-    res.json({
-      success: true,
-      date: parsedDate,
-      timezone: tz,
-      day: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek],
-      hours: `${formatTime(localToUTC(parsedDate, startHour, 0, tz), tz)} – ${formatTime(workEnd, tz)}`,
-      available: {
-        slots_30min: slots30,
-        slots_60min: slots60,
-      },
-    });
-  } catch (err) {
-    console.error('Google Calendar error:', err.message);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to check availability.',
-      details: err.message,
-    });
-  }
+  });
 });
 
 app.post('/book-appointment', async (req, res) => {
@@ -279,14 +284,13 @@ app.post('/book-appointment', async (req, res) => {
       dateTime: endDateTime.toISOString(),
       timeZone: tz,
     },
-    attendees: [{ email }],
   };
 
   try {
     const calendar = getCalendarClient();
     const response = await calendar.events.insert({
       calendarId: process.env.GOOGLE_CALENDAR_ID,
-      sendUpdates: 'all',
+      sendUpdates: 'none',
       resource: event,
     });
 
