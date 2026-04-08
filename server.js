@@ -21,6 +21,17 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/current-date', (req, res) => {
+  const today = new Date();
+  const formatted = today.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  res.json({ date: formatted });
+});
+
 app.post('/book-appointment', async (req, res) => {
   const { name, phone, date, time, service } = req.body;
 
