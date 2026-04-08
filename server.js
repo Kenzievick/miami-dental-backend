@@ -17,15 +17,49 @@ function getCalendarClient() {
   return google.calendar({ version: 'v3', auth });
 }
 
+// Parse a date string in YYYY-MM-DD or natural language (e.g. "April 11", "Saturday April 11")
+// Returns a YYYY-MM-DD string, or null if unparseable
+function parseDate(input) {
+  if (!input) return null;
+
+  const trimmed = input.trim();
+
+  // Already in YYYY-MM-DD format
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+
+  // Strip leading day-of-week if present (e.g. "Saturday April 11" → "April 11")
+  const stripped = trimmed.replace(
+    /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+/i,
+    ''
+  );
+
+  // Detect if a year was explicitly included
+  const hasYear = /\d{4}/.test(stripped);
+  const dateStr = hasYear ? stripped : `${stripped} ${new Date().getFullYear()}`;
+
+  const parsed = new Date(dateStr);
+  if (isNaN(parsed.getTime())) return null;
+
+  // If no year was given and the date is already in the past, roll to next year
+  if (!hasYear) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (parsed < today) parsed.setFullYear(parsed.getFullYear() + 1);
+  }
+
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 // Convert a local date + hour/minute in a given timezone to a UTC Date
 function localToUTC(dateStr, hour, minute, timezone) {
   const pad = (n) => String(n).padStart(2, '0');
   const localStr = `${dateStr}T${pad(hour)}:${pad(minute)}:00`;
 
-  // Treat the local string as UTC temporarily to measure the offset
   const approx = new Date(localStr + 'Z');
 
-  // Format approx in the target timezone to find what local time it represents
   const tzFormatted = approx.toLocaleString('en-CA', {
     timeZone: timezone,
     year: 'numeric',
@@ -37,11 +71,9 @@ function localToUTC(dateStr, hour, minute, timezone) {
     hour12: false,
   });
 
-  // Parse that back as UTC and compute the offset
   const tzDate = new Date(tzFormatted.replace(', ', 'T') + 'Z');
   const offsetMs = approx - tzDate;
 
-  // Apply offset to get the real UTC time for the local datetime
   return new Date(approx.getTime() + offsetMs);
 }
 
@@ -76,19 +108,29 @@ app.get('/check-availability', async (req, res) => {
   if (!date) {
     return res.status(400).json({
       success: false,
-      error: 'Missing required parameter: date. Use YYYY-MM-DD format.',
+      error: 'Missing required parameter: date. Accepts YYYY-MM-DD or natural language like "April 11" or "Saturday April 11".',
+    });
+  }
+
+  const parsedDate = parseDate(date);
+  if (!parsedDate) {
+    return res.status(400).json({
+      success: false,
+      error: `Could not parse date: "${date}". Try formats like "2026-04-11", "April 11", or "Saturday April 11".`,
     });
   }
 
   const tz = timezone || 'America/New_York';
 
+  console.log(`[check-availability] raw="${date}" parsed="${parsedDate}" tz="${tz}"`);
+
   // Determine day of week using noon UTC to avoid DST boundary issues
-  const dayOfWeek = new Date(`${date}T12:00:00Z`).getUTCDay(); // 0=Sun, 6=Sat
+  const dayOfWeek = new Date(`${parsedDate}T12:00:00Z`).getUTCDay(); // 0=Sun, 6=Sat
 
   if (dayOfWeek === 0) {
     return res.json({
       success: true,
-      date,
+      date: parsedDate,
       timezone: tz,
       available: { slots_30min: [], slots_60min: [] },
       message: 'No availability on Sundays.',
@@ -96,12 +138,11 @@ app.get('/check-availability', async (req, res) => {
   }
 
   const isSaturday = dayOfWeek === 6;
-  const startHour = isSaturday ? 9 : 8;   // Sat: 9am, Mon-Fri: 8am
-  const endHour   = isSaturday ? 14 : 18;  // Sat: 2pm, Mon-Fri: 6pm
+  const startHour = isSaturday ? 9 : 8;
+  const endHour   = isSaturday ? 14 : 18;
 
-  // Day bounds in UTC for the freebusy query
-  const dayStart = localToUTC(date, 0, 0, tz);
-  const dayEnd   = localToUTC(date, 23, 59, tz);
+  const dayStart = localToUTC(parsedDate, 0, 0, tz);
+  const dayEnd   = localToUTC(parsedDate, 23, 59, tz);
 
   try {
     const calendar = getCalendarClient();
@@ -122,7 +163,7 @@ app.get('/check-availability', async (req, res) => {
       end: new Date(b.end),
     }));
 
-    const workEnd = localToUTC(date, endHour, 0, tz);
+    const workEnd = localToUTC(parsedDate, endHour, 0, tz);
 
     const overlaps = (slotStart, slotEnd) =>
       busyPeriods.some((b) => slotStart < b.end && slotEnd > b.start);
@@ -136,9 +177,9 @@ app.get('/check-availability', async (req, res) => {
       const hour   = startHour + Math.floor(offset / 60);
       const minute = offset % 60;
 
-      const slotStart  = localToUTC(date, hour, minute, tz);
-      const slotEnd30  = new Date(slotStart.getTime() + 30 * 60 * 1000);
-      const slotEnd60  = new Date(slotStart.getTime() + 60 * 60 * 1000);
+      const slotStart = localToUTC(parsedDate, hour, minute, tz);
+      const slotEnd30 = new Date(slotStart.getTime() + 30 * 60 * 1000);
+      const slotEnd60 = new Date(slotStart.getTime() + 60 * 60 * 1000);
 
       if (slotEnd30 <= workEnd && !overlaps(slotStart, slotEnd30)) {
         slots30.push({
@@ -161,10 +202,10 @@ app.get('/check-availability', async (req, res) => {
 
     res.json({
       success: true,
-      date,
+      date: parsedDate,
       timezone: tz,
       day: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek],
-      hours: `${formatTime(localToUTC(date, startHour, 0, tz), tz)} – ${formatTime(workEnd, tz)}`,
+      hours: `${formatTime(localToUTC(parsedDate, startHour, 0, tz), tz)} – ${formatTime(workEnd, tz)}`,
       available: {
         slots_30min: slots30,
         slots_60min: slots60,
@@ -181,6 +222,8 @@ app.get('/check-availability', async (req, res) => {
 });
 
 app.post('/book-appointment', async (req, res) => {
+  console.log('[book-appointment] received params:', JSON.stringify(req.body, null, 2));
+
   const { name, phone, email, date, time, service, timezone } = req.body;
 
   // Validate required fields
